@@ -20,3 +20,7 @@ README: the six screenshots (`docs/screenshots/*.png`) were binaries and are not
 
 Verified locally: typecheck pass, lint pass, unit tests 12/12, `next build` pass, Playwright 5/5 passed.
 Note: the first E2E run (cold `next dev` server, machine busy with other builds) timed out in several tests; two re-runs (default workers and `--workers=1`) were 5/5 green. Possible CI flakiness on a cold dev server.
+
+## Screenshots (25 Nov 2026, Claude)
+
+- Added `scripts/screenshots.mjs` (Playwright, same pattern as shelfly/stamply) and re-captured the six README screenshots (`marketing`, `dashboard`, `approvals`, `invoice`, `admin`, `demo-mobile`) from a fresh `next start` in mock mode with seeded data. README image embeds restored with their original alt text.
