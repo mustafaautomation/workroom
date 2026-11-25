@@ -1,0 +1,134 @@
+# Workroom
+
+Workroom is a white-label client portal for agencies and consultants. Each studio gets a path that behaves like a subdomain (`/w/northline`, shown as `northline.workroom.app`), its own logo and brand color, and a room where clients approve work, download files, and pay an invoice.
+
+The app runs with **no environment variables**. Stripe, email, file storage, and the database are mocked until keys are present. The public demo at `/demo` needs no login and rejects every write.
+
+## Screenshots
+
+![Marketing](docs/screenshots/marketing.png)
+
+![Studio dashboard](docs/screenshots/dashboard.png)
+
+![Approvals](docs/screenshots/approvals.png)
+
+![Invoice](docs/screenshots/invoice.png)
+
+![Platform admin](docs/screenshots/admin.png)
+
+![Phone](docs/screenshots/demo-mobile.png)
+
+## Run it
+
+```bash
+npm install
+npm run dev
+```
+
+Open [http://127.0.0.1:3847](http://127.0.0.1:3847).
+
+| Path | What it is |
+| --- | --- |
+| `/` | Marketing site |
+| `/demo` | Read-only Northline Studio. `?agency=fieldnote` switches studios |
+| `/login` | Email and password, or a magic link |
+| `/w/northline` | Authenticated workspace |
+| `/admin` | Platform owner: plans and new workspaces |
+
+### Demo seats
+
+Every mock seat uses the password `workroom-demo`.
+
+| Email | Role |
+| --- | --- |
+| maya@northline.studio | Northline owner |
+| jordan@northline.studio | Northline teammate |
+| priya@acmerobotics.com | Acme Robotics client |
+| luis@harborandco.com | Harbor & Co client |
+| sam@fieldnote.advisory | Fieldnote owner |
+| elena@lumenhealth.com | Lumen Health client |
+| mustafa@quvantic.com | Platform owner |
+
+Priya can approve **Color and type** and pay invoice **NL-1042** ($4,800.00). She cannot open Harbor or anything at Fieldnote.
+
+## Tests
+
+```bash
+npm test          # tenant isolation, patches, local summaries
+npm run test:e2e  # Playwright: auth, isolation, approval, payment, read-only demo
+npm run typecheck
+```
+
+GitHub Actions (`.github/workflows/ci.yml`) runs the same checks on `ubuntu-latest` with no secrets. Playwright is `@playwright/test` 1.65 or newer so `playwright install --with-deps` works on current Ubuntu images.
+
+## Architecture
+
+```text
+Browser
+  └─ Next.js App Router
+       ├─ proxy.ts            demo header, session gate, Supabase token refresh
+       ├─ Server Components   workspace screens
+       ├─ Server Actions      approvals, comments, files, invoices, plans
+       └─ Data port
+            ├─ mock (default) seed + signed cookie patch
+            └─ Supabase       user JWT + RLS, when URL and publishable key exist
+```
+
+Tenancy is the path `/w/[slug]`. The sidebar prints `[slug].workroom.app` so the room feels like a subdomain without wildcard DNS.
+
+Roles are `super_admin`, `agency_owner`, `team_member`, and `client`. A client sees only their organization's projects, client-visible tasks, files, and invoices. A teammate sees the whole studio and nothing from another studio. The platform owner sees `/admin` and every workspace. The same rules live in `lib/domain/permissions.ts` (unit tested) and in `supabase/migrations/202611250001_init.sql` (RLS plus security-definer functions). Authorization reads `profiles`, not `user_metadata`.
+
+Mock mode keeps the seed in the repo and writes a compressed httpOnly cookie. Each browser has its own patch, so tests do not leak into each other, and a Vercel function with no database can still approve and pay inside one session. The public demo ignores that cookie and serves the original seed. Uploaded file bytes live in the server process; seed files live in `seed-files/` and survive restarts.
+
+Live mode uses `@supabase/ssr`. Reads go through the signed-in user so RLS applies. Cross-user notifications are database functions. Recording a Stripe payment or inviting someone uses the secret key on the server only.
+
+Plans are Starter (3 active projects, 2 team seats) and Pro (trial, upgrade, cancel), managed from `/admin`. Client invoices are a separate, thin Stripe Checkout flow. With no Stripe key, checkout is a labeled test-card screen.
+
+Status summaries prefer Groq, then Gemini, then a local note built from the project record. The screen says which source wrote it.
+
+## Environment
+
+Copy `.env.example` to `.env.local`. Every variable is optional. Empty means mock mode.
+
+| Variable | Live behavior |
+| --- | --- |
+| `NEXT_PUBLIC_APP_URL` | Absolute URL for magic links and Stripe return URLs |
+| `AUTH_SECRET` | Signs mock session cookies. The built-in fallback is public and only for the demo |
+| `NEXT_PUBLIC_SUPABASE_URL` | Turns on Supabase when a key is also set |
+| `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY` | Browser and server Supabase key. `NEXT_PUBLIC_SUPABASE_ANON_KEY` is accepted |
+| `SUPABASE_SECRET_KEY` | Service role for invites, new workspaces, and marking invoices paid. `SUPABASE_SERVICE_ROLE_KEY` is accepted. Never expose it to the browser |
+| `STRIPE_SECRET_KEY` | Stripe test secret. Checkout becomes real Stripe Checkout |
+| `STRIPE_WEBHOOK_SECRET` | `checkout.session.completed` marks the invoice paid |
+| `NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY` | Reserved for a future Stripe.js form. Checkout uses the hosted page |
+| `GROQ_API_KEY` / `GROQ_MODEL` | Project summary. Default model `llama-3.3-70b-versatile` |
+| `GEMINI_API_KEY` / `GEMINI_MODEL` | Used when Groq is unset. Default model `gemini-2.5-flash` |
+
+### Turn on Supabase
+
+1. Create a project.
+2. Run `supabase/migrations/202611250001_init.sql` in the SQL editor.
+3. Put the URL, publishable key, and secret key in `.env.local`.
+4. `npm run seed` creates the demo users (password `workroom-demo`) and the two studios.
+
+Storage bucket `project-files` is private. Policies allow a studio member to upload and a client to download only their projects.
+
+### Turn on Stripe test mode
+
+Set `STRIPE_SECRET_KEY` and `STRIPE_WEBHOOK_SECRET`. Point the webhook at `/api/stripe/webhook` for `checkout.session.completed`. The pay button sends the client to Stripe Checkout. Test card `4242 4242 4242 4242`.
+
+## Deploy
+
+The app is a standard Next.js project. On Vercel, deploy with **zero environment variables** and mock mode is the production behavior: marketing, `/demo`, sign-in, approvals, and the test checkout all work. Session changes live in the visitor's cookie.
+
+Intended host: `workroom.quvantic.com`.
+
+What has to be provided outside this repo:
+
+- DNS: `CNAME workroom` to `cname.vercel-dns.com` (or the A record Vercel shows for the apex).
+- A Vercel project named `workroom`, connected to the GitHub repo under `github.com/mustafaautomation`.
+- Supabase URL, publishable key, and secret key, plus the migration and `npm run seed`, when the data should outlive the browser.
+- Stripe test secret and webhook secret when payments should hit Stripe.
+- `AUTH_SECRET` before any real (non-demo) password is used.
+- Groq or Gemini keys only if the summary should come from a model.
+
+No HubSpot, voice, or n8n.
